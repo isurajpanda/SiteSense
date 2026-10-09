@@ -1,0 +1,23 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets / local env (see .env.example for template)
+.env
+
+# TLS private keys + self-signed dev cert (regenerate: see README)
+*.key
+deploy/apix.crt
+
+node_modules
+
+# OS / editor
+.DS_Store
+*.swp
+npm-debug.log
