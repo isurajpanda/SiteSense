@@ -33,6 +33,35 @@ const STATUS_COLOR: Record<Severity, string> = {
   critical: '#FF4D5E',
 };
 
+function buildingFrame(polygon: LngLat[], center: LngLat): { cx: number; cz: number; bw: number; bd: number } {
+  const pts = polygon.map((p) => toMeters(center, p));
+  const xs = pts.map((p) => p.x);
+  const zs = pts.map((p) => p.z);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minZ = Math.min(...zs);
+  const maxZ = Math.max(...zs);
+  return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, bw: maxX - minX, bd: maxZ - minZ };
+}
+
+const BUILDING_COLORS: Record<string, { wall: string; roof: string }> = {
+  academic: { wall: '#c8c4bc', roof: '#8b8680' },
+  library: { wall: '#b8a88a', roof: '#7a6a50' },
+  admin: { wall: '#d0ccc4', roof: '#908c84' },
+  lab: { wall: '#c4ccd4', roof: '#848c94' },
+  workshop: { wall: '#c8b8a0', roof: '#887860' },
+  hostel: { wall: '#d4c8b8', roof: '#948878' },
+  canteen: { wall: '#d8c4a8', roof: '#988468' },
+  auditorium: { wall: '#c8c0b4', roof: '#888074' },
+  sports: { wall: '#b8c8b0', roof: '#788870' },
+  parking: { wall: '#a8a8a8', roof: '#686868' },
+  residential: { wall: '#d0c4b0', roof: '#908470' },
+  utility: { wall: '#b0b0b0', roof: '#707070' },
+  gate: { wall: '#c0c0c0', roof: '#808080' },
+  waste: { wall: '#a0a090', roof: '#606050' },
+  solar: { wall: '#4060a0', roof: '#204080' },
+};
+
 function worstSeverity(alerts: Alert[], buildingId: string): Severity {
   let worst: Severity = 'ok';
   for (const a of alerts) {
@@ -68,15 +97,6 @@ function congestionColor(v: number): string {
   return stops[stops.length - 1][1];
 }
 
-interface Campus3DProps {
-  onBuildingClick: (buildingId: string) => void;
-  focusBuildingId: string | null;
-  focusTrigger: number;
-  autoOrbit: boolean;
-}
-
-/* ---------------------------------- rig ---------------------------------- */
-
 function CameraRig({ target, pos, animKey }: { target: [number, number, number]; pos: [number, number, number]; animKey: number | string }) {
   const camera = useThree((s) => s.camera);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,8 +109,18 @@ function CameraRig({ target, pos, animKey }: { target: [number, number, number];
     t.set(target[0], target[1], target[2]);
     p.set(pos[0], pos[1], pos[2]);
     animating.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animKey]);
+
+  useEffect(() => {
+    if (!controls) return;
+    const cancel = () => {
+      animating.current = false;
+    };
+    controls.addEventListener('start', cancel);
+    return () => {
+      controls.removeEventListener('start', cancel);
+    };
+  }, [controls]);
 
   useFrame(() => {
     if (!animating.current || !controls) return;
@@ -103,8 +133,6 @@ function CameraRig({ target, pos, animKey }: { target: [number, number, number];
   });
   return null;
 }
-
-/* --------------------------------- pieces --------------------------------- */
 
 function BuildingMesh({
   b,
@@ -123,46 +151,105 @@ function BuildingMesh({
   dimmed: boolean;
   onSelect: () => void;
 }) {
+  const h = Math.max(1.2, b.height);
+  const colors = BUILDING_COLORS[b.type] ?? BUILDING_COLORS.academic;
+  const frame = useMemo(() => buildingFrame(b.polygon, center), [b.polygon, center]);
+
   const geom = useMemo(() => {
     const pts = b.polygon.map((p) => toMeters(center, p));
     const shape = new THREE.Shape();
-    shape.moveTo(pts[0].x, pts[0].z);
-    for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x, pts[i].z);
+    shape.moveTo(pts[0].x - frame.cx, -(pts[0].z - frame.cz));
+    for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x - frame.cx, -(pts[i].z - frame.cz));
     shape.closePath();
-    const g = new THREE.ExtrudeGeometry(shape, { depth: Math.max(1.2, b.height), bevelEnabled: false });
+    const g = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
     g.rotateX(-Math.PI / 2);
+    g.computeBoundingBox();
+    const bb = g.boundingBox;
+    if (bb) {
+      g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+    }
     return g;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [b.id]);
+  }, [b.polygon, center, frame.cx, frame.cz, h]);
 
   useEffect(() => () => geom.dispose(), [geom]);
 
-  const c = useMemo(() => centroidMeters(center, b.polygon), [center, b.polygon]);
-  const h = Math.max(1.2, b.height);
+  const mats = useMemo(() => {
+    const wall = new THREE.MeshStandardMaterial({ roughness: 0.75, metalness: 0.1 });
+    const cap = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.05 });
+    return { wall, cap };
+  }, []);
+
+  useEffect(
+    () => () => {
+      mats.wall.dispose();
+      mats.cap.dispose();
+    },
+    [mats],
+  );
+
+  const hidden = entered && selected;
+  const opacity = hidden ? 0 : dimmed ? 0.35 : 1;
+  const statusEmissive = status === 'critical' ? '#FF4D5E' : status === 'warning' ? '#FFB020' : '#00E5C3';
+  mats.wall.color.set(colors.wall);
+  mats.wall.transparent = opacity < 1;
+  mats.wall.opacity = Math.max(opacity, 0.001);
+  mats.wall.emissive.set(statusEmissive);
+  mats.wall.emissiveIntensity = dimmed ? 0.05 : 0.15;
+  mats.wall.depthWrite = opacity >= 1;
+  mats.cap.color.set(colors.roof);
+  mats.cap.transparent = opacity < 1;
+  mats.cap.opacity = Math.max(opacity, 0.001);
+  mats.cap.depthWrite = opacity >= 1;
+
   return (
     <group>
-      <mesh
-        geometry={geom}
-        position={[0, 0, 0]}
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelect();
-        }}
-      >
-        <meshStandardMaterial
-          color={STATUS_COLOR[status]}
-          transparent={entered && selected}
-          opacity={entered && selected ? 0.1 : dimmed ? 0.35 : 0.75}
-          roughness={0.6}
-          metalness={0.25}
-          depthWrite={!(entered && selected)}
-        />
-        {selected && <Edges scale={1} threshold={15} color="#fafafa" />}
-      </mesh>
-      {!entered && (
-        <Html position={[c.x, h + 10, c.z]} center distanceFactor={500} zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
+      {!hidden && (
+        <mesh
+          geometry={geom}
+          material={[mats.cap, mats.wall]}
+          position={[frame.cx, 0, frame.cz]}
+          castShadow
+          receiveShadow
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+          }}
+        >
+          {selected && <Edges scale={1} threshold={15} color="#fafafa" />}
+        </mesh>
+      )}
+      {!hidden && b.type !== 'parking' && b.type !== 'sports' && b.type !== 'gate' && b.type !== 'waste' && (
+        <group>
+          {(b.type === 'academic' || b.type === 'hostel' || b.type === 'admin' || b.type === 'library') && (
+            <>
+              <mesh position={[frame.cx - 6, h + 0.75, frame.cz - 4]} castShadow>
+                <boxGeometry args={[3, 1.5, 3]} />
+                <meshStandardMaterial color="#6a6a6a" metalness={0.4} roughness={0.6} />
+              </mesh>
+              <mesh position={[frame.cx + 1, h + 0.75, frame.cz - 4]} castShadow>
+                <boxGeometry args={[3, 1.5, 3]} />
+                <meshStandardMaterial color="#6a6a6a" metalness={0.4} roughness={0.6} />
+              </mesh>
+            </>
+          )}
+          {(b.type === 'hostel' || b.type === 'canteen') && (
+            <mesh position={[frame.cx + frame.bw / 2 - 4, h + 1.5, frame.cz + frame.bd / 2 - 4]} castShadow>
+              <cylinderGeometry args={[1.5, 1.5, 3, 10]} />
+              <meshStandardMaterial color="#4a6a8a" metalness={0.3} roughness={0.7} />
+            </mesh>
+          )}
+          {(b.type === 'admin' || b.type === 'academic') && (
+            <mesh position={[frame.cx, h + 4, frame.cz]}>
+              <cylinderGeometry args={[0.15, 0.15, 8, 4]} />
+              <meshStandardMaterial color="#888888" metalness={0.7} roughness={0.3} />
+            </mesh>
+          )}
+        </group>
+      )}
+      {!hidden && (
+        <Html position={[frame.cx, h + 14, frame.cz]} center distanceFactor={500} zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
           <div
-            className="rounded border border-[#1a1a1a] bg-black/70 px-1.5 py-0.5 text-center font-hud text-[9px] font-bold uppercase tracking-wider"
+            className="rounded border border-[#1a1a1a] bg-black/70 px-1.5 py-0.5 text-center font-hud text-[9px] font-bold uppercase tracking-wider whitespace-nowrap"
             style={{ color: STATUS_COLOR[status] }}
           >
             {b.shortName}
@@ -178,11 +265,63 @@ function RoadSegment({ a, x2, z2, color, width }: { a: { x: number; z: number };
   if (len < 0.5) return null;
   const ang = Math.atan2(z2 - a.z, x2 - a.x);
   return (
-    <group position={[(a.x + x2) / 2, 0.15, (a.z + z2) / 2]} rotation-y={-ang}>
-      <mesh rotation-x={-Math.PI / 2}>
-        <planeGeometry args={[len, width]} />
-        <meshBasicMaterial color={color} transparent opacity={0.9} />
+    <group position={[(a.x + x2) / 2, 0.12, (a.z + z2) / 2]} rotation-y={-ang}>
+      <mesh rotation-x={-Math.PI / 2} receiveShadow>
+        <planeGeometry args={[len + 2, width + 3]} />
+        <meshStandardMaterial color="#0c0e11" roughness={1} />
       </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.02, 0]} receiveShadow>
+        <planeGeometry args={[len, width]} />
+        <meshStandardMaterial color="#3a4046" roughness={0.9} />
+      </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.04, 0]}>
+        <planeGeometry args={[len, 0.6]} />
+        <meshBasicMaterial color={color} transparent opacity={0.85} />
+      </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.04, width / 2 - 0.3]}>
+        <planeGeometry args={[len, 0.18]} />
+        <meshBasicMaterial color="#8a8f96" transparent opacity={0.55} />
+      </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.04, -width / 2 + 0.3]}>
+        <planeGeometry args={[len, 0.18]} />
+        <meshBasicMaterial color="#8a8f96" transparent opacity={0.55} />
+      </mesh>
+    </group>
+  );
+}
+
+function ParkingLot({ building, center, onSelect }: { building: Building; center: LngLat; onSelect: () => void }) {
+  if (building.type !== 'parking') return null;
+  const pts = building.polygon.map((p) => toMeters(center, p));
+  const xs = pts.map((p) => p.x);
+  const zs = pts.map((p) => p.z);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minZ = Math.min(...zs);
+  const maxZ = Math.max(...zs);
+  const w = maxX - minX;
+  const d = maxZ - minZ;
+
+  return (
+    <group>
+      <mesh
+        position={[(minX + maxX) / 2, 0.03, (minZ + maxZ) / 2]}
+        rotation-x={-Math.PI / 2}
+        receiveShadow
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+      >
+        <planeGeometry args={[w, d]} />
+        <meshStandardMaterial color="#151515" roughness={0.95} />
+      </mesh>
+      {Array.from({ length: Math.floor(w / 8) }, (_, c) => (
+        <mesh key={c} position={[minX + 4 + c * 8, 0.06, (minZ + maxZ) / 2]} rotation-x={-Math.PI / 2}>
+          <planeGeometry args={[0.2, d - 4]} />
+          <meshBasicMaterial color="#444444" transparent opacity={0.5} />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -200,19 +339,18 @@ function Interior({
   roomId: string | null;
   onRoom: (id: string) => void;
 }) {
-  const pts = useMemo(() => b.polygon.map((p) => toMeters(center, p)), [b.polygon, center]);
-  const bbox = useMemo(() => {
-    const xs = pts.map((p) => p.x);
-    const zs = pts.map((p) => p.z);
-    return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
-  }, [pts]);
-  const bw = bbox.maxX - bbox.minX;
-  const bd = bbox.maxZ - bbox.minZ;
+  const frame = useMemo(() => buildingFrame(b.polygon, center), [b.polygon, center]);
+  const bw = frame.bw;
+  const bd = frame.bd;
   const n = floors.length;
   const floorH = Math.max(4, Math.max(3, b.height) / n);
 
   return (
-    <group>
+    <group position={[frame.cx, 0, frame.cz]}>
+      <mesh position={[0, -0.15, 0]} receiveShadow>
+        <boxGeometry args={[bw + 1.5, 0.3, bd + 1.5]} />
+        <meshStandardMaterial color="#1c1c22" roughness={0.8} />
+      </mesh>
       {floors.map((f, fi) => {
         const cols = Math.ceil(Math.sqrt(f.rooms.length));
         const rows = Math.ceil(f.rooms.length / cols);
@@ -221,15 +359,15 @@ function Interior({
         const y = fi * floorH;
         return (
           <group key={f.floor}>
-            <mesh position={[(bbox.minX + bbox.maxX) / 2, y, (bbox.minZ + bbox.maxZ) / 2]}>
+            <mesh position={[0, y, 0]}>
               <boxGeometry args={[bw, 0.5, bd]} />
               <meshStandardMaterial color="#1c1c22" roughness={0.8} />
             </mesh>
             {f.rooms.map((r, ri) => {
               const col = ri % cols;
               const row = Math.floor(ri / cols);
-              const cx = bbox.minX + cw * (col + 0.5);
-              const cz = bbox.minZ + cd * (row + 0.5);
+              const cx = -bw / 2 + cw * (col + 0.5);
+              const cz = -bd / 2 + cd * (row + 0.5);
               const sel = roomId === r.id;
               return (
                 <mesh
@@ -260,7 +398,12 @@ function Interior({
   );
 }
 
-/* --------------------------------- main --------------------------------- */
+interface Campus3DProps {
+  onBuildingClick: (buildingId: string) => void;
+  focusBuildingId: string | null;
+  focusTrigger: number;
+  autoOrbit: boolean;
+}
 
 function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }: Campus3DProps) {
   const siteId = useSettingsStore((s) => s.siteId);
@@ -283,7 +426,6 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
       setEntered(false);
       setRoomId(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusTrigger]);
 
   const selected = site.buildings.find((b) => b.id === selectedId) ?? null;
@@ -301,7 +443,6 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
     if (!selected) return [];
     const ctx = liveFor(selected);
     return buildInterior(selected, ctx);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, alerts, history, binStates]);
 
   const selectedRoom = useMemo(() => {
@@ -321,14 +462,13 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
     const xs = pts.map((p) => p.x);
     const zs = pts.map((p) => p.z);
     return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs), 40);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
   const cam = selected
     ? entered
       ? {
-          target: [selCenter.x, selH * 0.5, selCenter.z] as [number, number, number],
-          pos: [selCenter.x + selSize * 0.9, selH * 0.6 + 14, selCenter.z + selSize * 0.9 + 18] as [number, number, number],
+          target: [selCenter.x, selH * 0.4, selCenter.z] as [number, number, number],
+          pos: [selCenter.x + selSize * 0.7, selH * 0.5 + 10, selCenter.z + selSize * 0.7 + 12] as [number, number, number],
         }
       : {
           target: [selCenter.x, selH / 2, selCenter.z] as [number, number, number],
@@ -357,25 +497,37 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
   return (
     <div className="relative h-full w-full bg-black">
       <Canvas
-        dpr={[1, 1.75]}
+        dpr={[1, 1.5]}
         camera={{ position: [310, 330, 310], fov: 50, near: 1, far: 6000 }}
+        shadows="percentage"
         onPointerMissed={() => {
           if (selectedId) deselect();
         }}
       >
-        <color attach="background" args={['#000000']} />
-        <fog attach="fog" args={['#000000', 700, 1800]} />
-        <ambientLight intensity={0.55} />
-        <hemisphereLight args={['#3a3a44', '#000000', 0.5]} />
-        <directionalLight position={[250, 350, 150]} intensity={1.4} />
+        <color attach="background" args={['#050508']} />
+        <fog attach="fog" args={['#050508', 700, 2600]} />
+        <ambientLight intensity={0.5} />
+        <hemisphereLight args={['#4a4a5a', '#0a0a0a', 0.5]} />
+        <directionalLight
+          position={[300, 400, 200]}
+          intensity={1.2}
+          castShadow
+          shadow-mapSize-width={1024}
+          shadow-mapSize-height={1024}
+          shadow-camera-far={1000}
+          shadow-camera-left={-400}
+          shadow-camera-right={400}
+          shadow-camera-top={400}
+          shadow-camera-bottom={-400}
+        />
+        <directionalLight position={[-200, 200, -100]} intensity={0.3} color="#6688aa" />
 
-        <mesh rotation-x={-Math.PI / 2} position={[0, -0.2, 0]}>
+        <mesh rotation-x={-Math.PI / 2} position={[0, -0.15, 0]} receiveShadow>
           <planeGeometry args={[3000, 3000]} />
-          <meshStandardMaterial color="#030304" roughness={1} />
+          <meshStandardMaterial color="#0d1210" roughness={0.95} metalness={0} />
         </mesh>
-        <gridHelper args={[2000, 50, '#1c1c22', '#0b0b0e']} position={[0, 0, 0]} />
+        <gridHelper args={[2000, 50, '#1c1c22', '#0b0b0e']} position={[0, -0.1, 0]} />
 
-        {/* roads (fictional estate network, congestion-tinted) */}
         {site.roads.map((r) => {
           const v = congestion[r.id] ?? 0.3;
           const color = congestionColor(v);
@@ -383,51 +535,66 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
           return (
             <group key={r.id}>
               {pts.slice(0, -1).map((a, i) => (
-                <RoadSegment key={i} a={a} x2={pts[i + 1].x} z2={pts[i + 1].z} color={color} width={7} />
+                <RoadSegment key={i} a={a} x2={pts[i + 1].x} z2={pts[i + 1].z} color={color} width={12} />
               ))}
             </group>
           );
         })}
 
-        {/* buildings */}
-        {site.buildings.map((b) => (
-          <BuildingMesh
-            key={b.id}
-            b={b}
-            center={site.center}
-            status={worstSeverity(alerts, b.id)}
-            selected={b.id === selectedId}
-            entered={entered && b.id === selectedId}
-            dimmed={!!selectedId && b.id !== selectedId}
-            onSelect={() => select(b.id)}
-          />
+        {site.buildings
+          .filter((b) => b.type !== 'parking')
+          .map((b) => (
+            <BuildingMesh
+              key={b.id}
+              b={b}
+              center={site.center}
+              status={worstSeverity(alerts, b.id)}
+              selected={b.id === selectedId}
+              entered={entered && b.id === selectedId}
+              dimmed={!!selectedId && b.id !== selectedId}
+              onSelect={() => select(b.id)}
+            />
+          ))}
+
+        {site.buildings.filter((b) => b.type === 'parking').map((b) => (
+          <ParkingLot key={`parking-${b.id}`} building={b} center={site.center} onSelect={() => select(b.id)} />
         ))}
 
-        {/* gates */}
         {site.gates.map((g) => {
           const m = toMeters(site.center, g.position);
           return (
-            <mesh key={g.id} position={[m.x, 3, m.z]}>
-              <coneGeometry args={[4, 7, 4]} />
-              <meshBasicMaterial color="#38BDF8" />
-            </mesh>
+            <group key={g.id} position={[m.x, 0, m.z]}>
+              <mesh position={[0, 2.5, 0]} castShadow>
+                <coneGeometry args={[3, 5, 4]} />
+                <meshStandardMaterial color="#38BDF8" emissive="#38BDF8" emissiveIntensity={0.3} />
+              </mesh>
+              <mesh position={[0, 6, 0]}>
+                <sphereGeometry args={[0.8, 8, 8]} />
+                <meshBasicMaterial color="#7dd3fc" />
+              </mesh>
+            </group>
           );
         })}
 
-        {/* bins */}
         {layers.waste &&
           site.bins.map((bin) => {
             const m = toMeters(site.center, bin.position);
             const fill = binStates[bin.id] ?? 0;
+            const color = fill > 85 ? '#FF4D5E' : fill > 70 ? '#FFB020' : '#00E5C3';
             return (
-              <mesh key={bin.id} position={[m.x, 2, m.z]}>
-                <cylinderGeometry args={[1.6, 1.6, 4, 10]} />
-                <meshBasicMaterial color={fill > 85 ? '#FF4D5E' : fill > 70 ? '#FFB020' : '#00E5C3'} />
-              </mesh>
+              <group key={bin.id} position={[m.x, 0, m.z]}>
+                <mesh position={[0, 1.5, 0]} castShadow>
+                  <cylinderGeometry args={[1.2, 1.4, 3, 8]} />
+                  <meshStandardMaterial color={color} roughness={0.6} metalness={0.3} />
+                </mesh>
+                <mesh position={[0, 3.2, 0]}>
+                  <cylinderGeometry args={[1.3, 1.3, 0.3, 8]} />
+                  <meshStandardMaterial color="#2a2a2a" roughness={0.7} />
+                </mesh>
+              </group>
             );
           })}
 
-        {/* live data markers */}
         {site.buildings.map((b) => {
           const c = centroidMeters(site.center, b.polygon);
           const h = Math.max(1.2, b.height);
@@ -440,19 +607,19 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
               {layers.air && (
                 <mesh position={[c.x, h + 12, c.z]}>
                   <sphereGeometry args={[3, 12, 12]} />
-                  <meshBasicMaterial color={pm25 > 120 ? '#FF4D5E' : pm25 > 60 ? '#FFB020' : '#00E5C3'} />
+                  <meshBasicMaterial color={pm25 > 120 ? '#FF4D5E' : pm25 > 60 ? '#FFB020' : '#00E5C3'} transparent opacity={0.8} />
                 </mesh>
               )}
               {layers.occupancy && (
                 <mesh position={[c.x + 7, h + 9, c.z]}>
                   <sphereGeometry args={[2.2, 12, 12]} />
-                  <meshBasicMaterial color={occFrac > 1 ? '#B91C1C' : occFrac > 0.85 ? '#FF4D5E' : occFrac > 0.5 ? '#FFB020' : '#00E5C3'} />
+                  <meshBasicMaterial color={occFrac > 1 ? '#B91C1C' : occFrac > 0.85 ? '#FF4D5E' : occFrac > 0.5 ? '#FFB020' : '#00E5C3'} transparent opacity={0.8} />
                 </mesh>
               )}
               {layers.energy && (
                 <mesh position={[c.x - 7, h + 9, c.z]}>
                   <sphereGeometry args={[2.2, 12, 12]} />
-                  <meshBasicMaterial color={kw > 150 ? '#7DD3FC' : kw > 50 ? '#38BDF8' : '#1D4ED8'} />
+                  <meshBasicMaterial color={kw > 150 ? '#7DD3FC' : kw > 50 ? '#38BDF8' : '#1D4ED8'} transparent opacity={0.8} />
                 </mesh>
               )}
               {layers.reports &&
@@ -462,14 +629,13 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
                   .map((r, i) => (
                     <mesh key={r.id} position={[c.x - 4 + i * 8, h + 6, c.z + 6]}>
                       <octahedronGeometry args={[2]} />
-                      <meshBasicMaterial color="#FF4D5E" />
+                      <meshBasicMaterial color="#FF4D5E" transparent opacity={0.8} />
                     </mesh>
                   ))}
             </group>
           );
         })}
 
-        {/* interior of entered building */}
         {selected && entered && (
           <Interior
             b={selected}
@@ -480,7 +646,6 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
           />
         )}
 
-        {/* alert beacons */}
         {alerts
           .filter((a) => a.severity !== 'ok')
           .slice(0, 12)
@@ -489,11 +654,15 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
             if (!b) return null;
             const c = centroidMeters(site.center, b.polygon);
             const h = Math.max(1.2, b.height);
+            const color = a.severity === 'critical' ? '#FF4D5E' : '#FFB020';
             return (
-              <mesh key={a.id} position={[c.x, h + 18, c.z]}>
-                <octahedronGeometry args={[2.6]} />
-                <meshBasicMaterial color={a.severity === 'critical' ? '#FF4D5E' : '#FFB020'} />
-              </mesh>
+              <group key={a.id} position={[c.x, h + 18, c.z]}>
+                <mesh>
+                  <octahedronGeometry args={[2.6]} />
+                  <meshBasicMaterial color={color} transparent opacity={0.9} />
+                </mesh>
+                <pointLight intensity={0.5} distance={20} color={color} />
+              </group>
             );
           })}
 
@@ -503,13 +672,12 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
           autoRotate={autoOrbit && !selectedId}
           autoRotateSpeed={0.7}
           maxPolarAngle={Math.PI / 2 - 0.03}
-          minDistance={8}
-          maxDistance={1400}
+          minDistance={entered ? 10 : 8}
+          maxDistance={entered ? selSize * 1.6 + 80 : 1400}
         />
         <CameraRig target={cam.target} pos={cam.pos} animKey={animKey} />
       </Canvas>
 
-      {/* hint */}
       {!selectedId && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2">
           <div className="rounded-full border border-[#1a1a1a] bg-[#0a0a0a]/85 px-3 py-1 font-hud text-[10px] uppercase tracking-wider text-[#8a8a8a] backdrop-blur">
@@ -518,7 +686,6 @@ function Campus3D({ onBuildingClick, focusBuildingId, focusTrigger, autoOrbit }:
         </div>
       )}
 
-      {/* interior panel */}
       {selected && (
         <div className="absolute bottom-24 left-3 top-24 z-30 flex w-[19rem] flex-col overflow-hidden rounded border border-[#1a1a1a] bg-[#050506]/95 backdrop-blur">
           <div className="border-b border-[#1a1a1a] p-2.5">

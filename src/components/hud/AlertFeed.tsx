@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, AlertOctagon, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { useSimStore } from '@/store/useSimStore';
-import { formatSimTime } from '@/lib/sim/clock';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
@@ -23,6 +22,8 @@ export default function AlertFeed({ onAlertClick }: { onAlertClick: (buildingId:
   const alerts = useSimStore((s) => s.alerts);
   const [collapsed, setCollapsed] = useState(false);
 
+  const displayAlerts = alerts.slice(0, 5);
+
   return (
     <div className="pointer-events-auto w-72">
       <div className="hud-panel hud-corner">
@@ -31,7 +32,7 @@ export default function AlertFeed({ onAlertClick }: { onAlertClick: (buildingId:
           className="flex w-full items-center justify-between px-3 py-2"
         >
           <span className="flex items-center gap-2">
-            <span className="hud-label">Live Alerts</span>
+            <span className="hud-label">Alerts</span>
             <Badge variant={alerts.some((a) => a.severity === 'critical') ? 'destructive' : 'ok'}>
               {alerts.length}
             </Badge>
@@ -39,14 +40,14 @@ export default function AlertFeed({ onAlertClick }: { onAlertClick: (buildingId:
           {collapsed ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronUp size={14} className="text-muted-foreground" />}
         </button>
         {!collapsed && (
-          <ScrollArea className="max-h-[40vh] px-2 pb-2">
-            {alerts.length === 0 && (
+          <ScrollArea className="max-h-[35vh] px-2 pb-2">
+            {displayAlerts.length === 0 && (
               <div className="px-2 py-6 text-center text-xs text-[#8a8a8a]">
-                No active alerts. All systems nominal.
+                All systems nominal
               </div>
             )}
             <div className="flex flex-col gap-1.5">
-              {alerts.slice(0, 20).map((a) => {
+              {displayAlerts.map((a) => {
                 const Icon = SEV_ICON[a.severity];
                 return (
                   <button
@@ -62,7 +63,6 @@ export default function AlertFeed({ onAlertClick }: { onAlertClick: (buildingId:
                       <span className="flex-1 truncate font-hud text-[11px] font-bold uppercase tracking-wider text-[#fafafa]">
                         {a.buildingName}
                       </span>
-                      <span className="font-mono text-[9px] text-[#8a8a8a]">{formatSimTime(a.t)}</span>
                     </div>
                     <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-[#8a8a8a]">{a.message}</p>
                   </button>

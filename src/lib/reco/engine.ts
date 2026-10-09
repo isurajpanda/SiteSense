@@ -184,7 +184,7 @@ export function runEngine(input: EngineInput, _llm?: LLMProvider): Recommendatio
   }
 
   // 5. Overflow parking.
-  if (parkingOccupancyPct > site.thresholds.parkingWarningPct) {
+  if (parkingOccupancyPct > site.thresholds.parkingWarningPct * 100) {
     const lot = site.parkingLots[0];
     recs.push({
       id: rid(),
@@ -192,12 +192,12 @@ export function runEngine(input: EngineInput, _llm?: LLMProvider): Recommendatio
       type: 'overflow-parking',
       title: 'Open overflow parking arrangement',
       plainLanguage: `Main parking is ${Math.round(parkingOccupancyPct)}% full. Open the overflow area near the sports ground and deploy a marshal at the gate to direct vehicles.`,
-      severity: parkingOccupancyPct > site.thresholds.parkingCriticalPct ? 'critical' : 'warning',
+      severity: parkingOccupancyPct > site.thresholds.parkingCriticalPct * 100 ? 'critical' : 'warning',
       buildingIds: [lot?.buildingId ?? 'parking'],
       action: 'Open overflow parking; deploy traffic marshal at main gate.',
       expectedImpact: 'Reduces gate queueing and illegal roadside parking.',
       confidence: 0.7,
-      rationale: [`Parking occupancy ${Math.round(parkingOccupancyPct)}% vs warning ${site.thresholds.parkingWarningPct}%.`],
+      rationale: [`Parking occupancy ${Math.round(parkingOccupancyPct)}% vs warning ${Math.round(site.thresholds.parkingWarningPct * 100)}%.`],
       assumptions: ['Overflow area is available and safe to use.', 'Marshal availability assumed.'],
       owner: 'operations',
       status: 'open',

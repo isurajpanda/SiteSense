@@ -102,7 +102,9 @@ function computeKpis(
   const binsAbove80 = Object.values(binStates).filter((v) => v > 80).length;
   const parkingVals = Object.values(parkingStates);
   const parkingOccupancyPct =
-    parkingVals.length > 0 ? (parkingVals.reduce((a, b) => a + b, 0) / parkingVals.length) * 100 : 0;
+    parkingVals.length > 0
+      ? Math.min(100, Math.max(0, parkingVals.reduce((a, b) => a + b, 0) / parkingVals.length))
+      : 0;
   return {
     totalPeople: Math.round(totalPeople),
     campusAqi: pmCount > 0 ? Math.round(pmSum / pmCount) : 0,

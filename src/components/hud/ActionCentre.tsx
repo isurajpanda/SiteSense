@@ -19,11 +19,9 @@ export default function ActionCentre({ onFocusBuilding }: { onFocusBuilding: (id
   const siteId = useSettingsStore((s) => s.siteId);
   const site = getSite(siteId);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [showHandled, setShowHandled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-  const open = recommendations.filter((r) => r.status === 'open');
-  const handled = recommendations.filter((r) => r.status !== 'open');
+  const open = recommendations.filter((r) => r.status === 'open').slice(0, 3);
 
   return (
     <div className="pointer-events-auto w-80">
@@ -34,15 +32,15 @@ export default function ActionCentre({ onFocusBuilding }: { onFocusBuilding: (id
         >
           <span className="flex items-center gap-1.5">
             <Sparkles size={12} className="text-data" />
-            <span className="hud-label">Action Centre</span>
+            <span className="hud-label">Actions</span>
           </span>
           {collapsed ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronUp size={14} className="text-muted-foreground" />}
         </button>
         {!collapsed && (
-          <ScrollArea className="max-h-[44vh] px-2 pb-2">
+          <ScrollArea className="max-h-[35vh] px-2 pb-2">
             {open.length === 0 && (
               <div className="px-2 py-6 text-center text-xs text-[#8a8a8a]">
-                No open recommendations. The engine re-evaluates every tick.
+                No pending actions
               </div>
             )}
             <div className="flex flex-col gap-1.5">
@@ -60,28 +58,6 @@ export default function ActionCentre({ onFocusBuilding }: { onFocusBuilding: (id
                 />
               ))}
             </div>
-            {handled.length > 0 && (
-              <div className="mt-2">
-                <button
-                  className="flex w-full items-center gap-1 px-1 py-1 font-hud text-[10px] font-semibold uppercase tracking-wider text-[#8a8a8a] hover:text-[#fafafa]"
-                  onClick={() => setShowHandled(!showHandled)}
-                >
-                  {showHandled ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  Handled ({handled.length})
-                </button>
-                {showHandled &&
-                  handled.slice(0, 8).map((r) => (
-                    <div key={r.id} className="rounded border border-[#1a1a1a] bg-[#0a0a0a]/40 p-2 opacity-60">
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant={r.status === 'accepted' ? 'ok' : r.status === 'snoozed' ? 'warning' : 'outline'}>
-                          {r.status}
-                        </Badge>
-                        <span className="truncate text-[11px] text-[#8a8a8a]">{r.title}</span>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            )}
           </ScrollArea>
         )}
       </div>
@@ -133,26 +109,14 @@ function RecoCard({
             {reco.action}
           </div>
           <div className="text-[11px] text-[#8a8a8a]">
-            <span className="font-semibold text-[#fafafa]">Expected impact: </span>
+            <span className="font-semibold text-[#fafafa]">Impact: </span>
             {reco.expectedImpact}
-          </div>
-          <div className="text-[11px] text-[#8a8a8a]">
-            <span className="font-semibold text-[#fafafa]">Owner: </span>
-            {reco.owner} · Confidence {Math.round(reco.confidence * 100)}%
           </div>
           <div>
             <div className="hud-label mb-0.5">Rationale</div>
             <ul className="list-inside list-disc space-y-0.5 text-[10px] text-[#8a8a8a]">
-              {reco.rationale.map((r, i) => (
+              {reco.rationale.slice(0, 3).map((r, i) => (
                 <li key={i}>{r}</li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <div className="hud-label mb-0.5">Assumptions</div>
-            <ul className="list-inside list-disc space-y-0.5 text-[10px] text-[#8a8a8a]">
-              {reco.assumptions.map((a, i) => (
-                <li key={i}>{a}</li>
               ))}
             </ul>
           </div>

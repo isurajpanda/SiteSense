@@ -126,6 +126,19 @@ export function forecastSeries(
   unit: string,
   assumptions: string[],
 ): Forecast {
+  if (series.length === 0) {
+    return {
+      sensorId,
+      buildingId,
+      label,
+      unit,
+      model: 'insufficient data',
+      horizonHours,
+      windowHours: 0,
+      points: [],
+      assumptions: [...assumptions, 'No history for this sensor yet; forecast unavailable.'],
+    };
+  }
   if (series.length >= SEASON * 2) {
     return holtWinters(series, horizonHours, label, sensorId, buildingId, unit, assumptions);
   }
